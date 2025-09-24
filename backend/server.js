@@ -42,11 +42,11 @@ pool.getConnection((err, connection) => {
 });
 
 
-// =================================================================
-// --- AUTHENTICATION ROUTES ---
-// =================================================================
 
-/**
+// --- AUTHENTICATION ROUTES ---
+
+/**REGISTER ROUTE
+ 
  * @route   POST /api/register
  * @desc    Registers a new user.
  * @access  Public
@@ -90,7 +90,8 @@ app.post('/api/register', async (req, res) => {
     }
 });
 
-/**
+/**LOGIN ROUTE
+ 
  * @route   POST /api/login
  * @desc    Logs in a user and returns a JWT.
  * @access  Public
@@ -134,10 +135,58 @@ app.post('/api/login', async (req, res) => {
     }
 });
 
+// Sign-In Google Route
 
-// =================================================================
+/**
+ * @route   POST /api/auth/google
+ * @desc    Handles user sign-in/sign-up via Google OAuth.
+ * @access  Public
+ * @body    { email, name, image }
+ */
+app.post('/api/auth/google', async (req, res) => {
+    const { email, name, image } = req.body;
+
+    if (!email) {
+        return res.status(400).json({ message: 'Email is required from Google profile' });
+    }
+
+    try {
+        // 1. Check if the user already exists in the database.
+        const [users] = await pool.promise().query('SELECT * FROM users WHERE email = ?', [email]);
+        let user = users[0];
+
+        // 2. If the user does NOT exist, create a new one.
+        if (!user) {
+            // For social logins, we generate a secure, random password since they won't use it.
+            const randomPassword = crypto.randomBytes(16).toString('hex');
+            const hashedPassword = await bcrypt.hash(randomPassword, 10);
+
+            // Create the new user and CRUCIALLY set onboarded to 0.
+            await pool.promise().query(
+                'INSERT INTO users (email, password, name, onboarded) VALUES (?, ?, ?, ? )',
+                [email, hashedPassword, name, 0] // Set onboarded to 0
+            );
+
+            const [newUsers] = await pool.promise().query('SELECT * FROM users WHERE email = ?', [email]);
+            user = newUsers[0];
+        }
+
+        // 3. For both existing and new users, create a JWT.
+        const payload = { id: user.id };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+
+        delete user.password; // Never send the password hash.
+
+        // 4. Send back the complete user object from YOUR database and the token.
+        res.status(200).json({ user: user, token: token });
+
+    } catch (error) {
+        console.error('!!! GOOGLE AUTH ERROR !!!:', error);
+        res.status(500).json({ message: 'An error occurred during Google authentication' });
+    }
+});
+
 // --- USER PROFILE & MANAGEMENT ROUTES ---
-// =================================================================
 
 /**
  * @route   PUT /api/profile/password
@@ -311,9 +360,8 @@ app.put('/api/onboarding', authMiddleware, async (req, res) => {
 });
 
 
-// =================================================================
 // --- SERVER INITIALIZATION ---
-// =================================================================
+
 app.listen(port, () => {
     console.log(`Backend server listening at http://localhost:${port}`);
 });
